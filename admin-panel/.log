@@ -1,0 +1,15 @@
+
+========================================
+  OpenClaw 管理面板已启动
+========================================
+  访问地址：http://localhost:3000
+  健康检查：http://localhost:3000/api/health
+  系统信息：http://localhost:3000/api/system
+========================================
+
+[2026-03-18T12:59:22.031Z] GET /api/health
+[2026-03-18T12:59:22.037Z] GET /api/system
+[2026-03-18T13:26:34.104Z] GET /api/health
+[2026-03-18T13:26:34.110Z] GET /api/system
+[2026-03-18T13:26:34.113Z] GET /api/resources/stats
+[2026-03-18T13:26:34.116Z] GET /api/instances
