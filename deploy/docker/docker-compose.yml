@@ -94,6 +94,30 @@ services:
       auth-service:
         condition: service_healthy
 
+  # Monitor Service (Resource Monitoring & Audit)
+  monitor-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.monitor
+    container_name: openclaw-monitor
+    environment:
+      NODE_ENV: production
+      PORT: 3003
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: openclaw
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:-openclaw_secret}
+      AUTH_SERVICE_URL: http://auth-service:3001
+      LOG_LEVEL: info
+    ports:
+      - "3003:3003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+
   # Web Console
   web-console:
     build:
