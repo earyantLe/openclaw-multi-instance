@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/common",
+  "version": "2.0.0",
+  "description": "Shared utilities and types",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

@@ -1,0 +1,65 @@
+# Build stage
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY apps/instance-service/package*.json ./apps/instance-service/
+COPY packages/*/package*.json ./packages/
+
+# Install dependencies
+RUN npm install --frozen-lockfile
+
+# Copy source code
+COPY apps/instance-service ./apps/instance-service
+COPY packages ./packages
+COPY deploy-core ./deploy-core
+COPY scripts ./scripts
+
+# Build instance service
+WORKDIR /app/apps/instance-service
+RUN npm run build
+
+# Production stage
+FROM node:22-alpine
+
+WORKDIR /app
+
+# Install bash for scripts
+RUN apk add --no-cache bash
+
+# Install production dependencies only
+COPY package*.json ./
+COPY apps/instance-service/package*.json ./apps/instance-service/
+COPY packages/db/package*.json ./packages/db/
+COPY packages/logger/package*.json ./packages/logger/
+COPY packages/common/package*.json ./packages/common/
+
+RUN npm install --production --workspace=@openclaw/instance-service
+
+# Copy built files
+COPY --from=builder /app/apps/instance-service/dist ./apps/instance-service/dist
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/packages/logger/dist ./packages/logger/dist
+COPY --from=builder /app/packages/common/dist ./packages/common/dist
+
+# Copy scripts
+COPY --from=builder /app/deploy-core ./deploy-core
+COPY --from=builder /app/scripts ./scripts
+
+# Make scripts executable
+RUN chmod +x ./deploy-core/instance-manager.sh ./scripts/backup.sh
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
+USER nodejs
+
+EXPOSE 3002
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3002/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
+
+CMD ["node", "apps/instance-service/dist/index.js"]

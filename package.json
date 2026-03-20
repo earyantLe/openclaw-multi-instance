@@ -1,5 +1,50 @@
 {
-  "dependencies": {
-    "puppeteer-core": "^24.40.0"
-  }
+  "name": "openclaw-multi-instance",
+  "version": "2.0.0-enterprise",
+  "description": "Enterprise-grade multi-instance management system for OpenClaw",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:auth\" \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:auth": "npm run dev -w @openclaw/auth-service",
+    "dev:api": "npm run dev -w @openclaw/instance-service",
+    "dev:web": "npm run dev -w @openclaw/web-console",
+    "build": "npm run build -w @openclaw/auth-service && npm run build -w @openclaw/instance-service && npm run build -w @openclaw/web-console",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "k8s:deploy": "kubectl apply -f deploy/kubernetes/",
+    "backup": "./scripts/backup.sh",
+    "health-check": "./scripts/health-check.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.4.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw-multi-instance.git"
+  },
+  "keywords": [
+    "openclaw",
+    "multi-instance",
+    "enterprise",
+    "kubernetes",
+    "saas",
+    "rbac",
+    "multi-tenant"
+  ],
+  "author": "OpenClaw Team",
+  "license": "MIT"
 }

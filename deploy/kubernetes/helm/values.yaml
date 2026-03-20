@@ -1,0 +1,135 @@
+# Default values for OpenClaw
+replicaCount: 2
+
+image:
+  repository: openclaw
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Auth Service Configuration
+authService:
+  name: auth-service
+  port: 3001
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  jwtExpiresIn: "24h"
+
+# Instance Service Configuration
+instanceService:
+  name: instance-service
+  port: 3002
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# Web Console Configuration
+webConsole:
+  name: web-console
+  port: 3000
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+
+# PostgreSQL Configuration
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "change-me-in-production"
+    database: openclaw
+  primary:
+    persistence:
+      size: 10Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+# Redis Configuration
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: "change-me-in-production"
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+
+# Ingress Configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+  hosts:
+    - host: openclaw.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+# Monitoring Configuration
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+
+# Logging Configuration
+logging:
+  level: info
+  format: json
+
+# Scaling Configuration (for SaaS mode)
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Plan limits (Community/Professional/Enterprise)
+plans:
+  community:
+    maxInstances: 10
+    maxBackups: 5
+    maxUsers: 3
+  professional:
+    maxInstances: 50
+    maxBackups: 20
+    maxUsers: 25
+  enterprise:
+    maxInstances: 200
+    maxBackups: 100
+    maxUsers: 100
