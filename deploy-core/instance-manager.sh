@@ -343,19 +343,24 @@ start_instance() {
 
     log_info "启动实例 $id ($name)..."
 
-    # 启动 OpenClaw (假设 openclaw 命令可用)
+    # 启动 OpenClaw Gateway (使用 --profile 实现实例隔离)
     cd "$dir"
     export $(cat .env | xargs)
 
-    # 后台运行 openclaw
+    # 使用 profile 模式启动，每个实例有独立的状态和配置
+    local profile_name="instance_${id}"
+
+    # 后台运行 openclaw gateway
     if command -v openclaw &> /dev/null; then
-        openclaw --port $port > "$dir/logs/openclaw.log" 2>&1 &
+        # 使用 profile 模式启动，实例隔离在 ~/.openclaw-instance_<id>
+        # 使用 --allow-unconfigured 允许未配置启动，使用 local 模式
+        openclaw --profile "$profile_name" gateway --port $port --allow-unconfigured > "$dir/logs/openclaw.log" 2>&1 &
         local pid=$!
         echo $pid > "$dir/openclaw.pid"
         log_success "实例 $id 已启动 (PID: $pid)"
     elif command -v npx &> /dev/null; then
         # 尝试使用 npx 运行 openclaw
-        npx openclaw --port $port > "$dir/logs/openclaw.log" 2>&1 &
+        npx openclaw --profile "$profile_name" gateway --port $port --allow-unconfigured > "$dir/logs/openclaw.log" 2>&1 &
         local pid=$!
         echo $pid > "$dir/openclaw.pid"
         log_success "实例 $id 已启动 (npx 模式，PID: $pid)"

@@ -140,6 +140,52 @@ curl -X POST http://localhost:3000/api/batch/start-all
 curl http://localhost:3000/api/system
 ```
 
+### 方式四：与实例对话（重要）
+
+可以通过以下方式与不同的实例分别对话：
+
+#### 1. 使用 profile 选项（推荐）
+
+每个实例使用独立的 profile，状态完全隔离：
+
+```bash
+# 与实例 1 对话
+openclaw --profile instance_1 agent -m "你好，实例 1"
+
+# 与实例 2 对话
+openclaw --profile instance_2 agent -m "你好，实例 2"
+
+# 交互式对话
+openclaw --profile instance_1
+```
+
+#### 2. 使用 TUI 终端界面
+
+```bash
+# 连接到实例 1 (端口 18790)
+openclaw tui --url ws://127.0.0.1:18790
+
+# 连接到实例 2 (端口 18795)
+openclaw tui --url ws://127.0.0.1:18795
+```
+
+#### 3. 直接访问 Web UI
+
+每个实例都有独立的 Web 界面：
+
+- **实例 1**: http://localhost:18790
+- **实例 2**: http://localhost:18795
+
+#### 4. 使用 Dashboard
+
+```bash
+# 打开实例 1 的 dashboard
+openclaw --profile instance_1 dashboard
+
+# 打开实例 2 的 dashboard
+openclaw --profile instance_2 dashboard
+```
+
 ## 高级功能
 
 ### 1. 备份与还原
@@ -396,6 +442,33 @@ NODE_MIN_VERSION=22      # 最低 Node.js 版本
 - **系统信息**：查看系统资源和实例统计
 - **响应式设计**：支持手机和平板访问
 - **自动刷新**：每 30 秒自动刷新实例状态
+
+## 截图
+
+### 管理面板
+
+访问 http://localhost:3000 查看管理面板：
+
+![管理面板](screenshots/admin-panel.png)
+
+### 实例列表
+
+![实例列表](screenshots/instances-list.png)
+
+### 实例 Web UI
+
+每个实例都有独立的 Web 界面：
+
+- 实例 1: http://localhost:18790
+- 实例 2: http://localhost:18795
+
+![实例 Web UI](screenshots/instance-web-ui.png)
+
+### 终端 TUI
+
+使用 `openclaw tui` 命令连接实例：
+
+![Terminal TUI](screenshots/terminal-tui.png)
 
 ## 命令行功能
 
