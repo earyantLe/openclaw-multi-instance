@@ -112,6 +112,22 @@ function renderInstances(instances) {
                             <i class="bi bi-trash"></i>
                         </button>
                     </div>
+                    <div class="chat-access mt-2 pt-2 border-top">
+                        <div class="d-grid gap-1">
+                            <a href="http://localhost:${instance.port}" target="_blank" class="btn btn-outline-primary btn-sm">
+                                <i class="bi bi-box-arrow-up-right"></i> 打开 Web UI
+                            </a>
+                            <button class="btn btn-outline-success btn-sm" onclick="copyProfileCommand(${instance.id}, '${escapeHtml(instance.name)}')" title="复制 profile 命令">
+                                <i class="bi bi-terminal"></i> 复制对话命令
+                            </button>
+                            <button class="btn btn-outline-info btn-sm" onclick="viewConfig(${instance.id})" title="编辑配置">
+                                <i class="bi bi-gear"></i> 配置
+                            </button>
+                            <button class="btn btn-outline-warning btn-sm" onclick="createBackup(${instance.id}, '${escapeHtml(instance.name)}')" title="备份实例">
+                                <i class="bi bi-cloud-upload"></i> 备份
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -420,8 +436,9 @@ async function viewConfig(id) {
             document.getElementById('configInstanceName').textContent = instance.name;
             document.getElementById('configInstanceId').value = instance.id;
             document.getElementById('configWorkspace').value = config.workspace || '';
+            document.getElementById('configName').value = config.instanceName || instance.name;
             document.getElementById('configId').value = instance.id;
-            document.getElementById('configPort').value = instance.port;
+            document.getElementById('configPortInput').value = config.port || instance.port;
             document.getElementById('configCreatedAt').value = formatDate(config.createdAt);
 
             configModal = new bootstrap.Modal(document.getElementById('configModal'));
@@ -438,6 +455,8 @@ async function viewConfig(id) {
 async function saveConfig() {
     const id = document.getElementById('configInstanceId').value;
     const workspace = document.getElementById('configWorkspace').value.trim();
+    const instanceName = document.getElementById('configName').value.trim();
+    const port = document.getElementById('configPortInput').value.trim();
 
     if (!workspace) {
         showToast('工作空间不能为空', 'warning');
@@ -448,7 +467,7 @@ async function saveConfig() {
         const response = await fetch(`${API_BASE}/instances/${id}/config`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workspace })
+            body: JSON.stringify({ workspace, name: instanceName, port: port ? parseInt(port) : null })
         });
 
         const result = await response.json();
@@ -456,12 +475,30 @@ async function saveConfig() {
         if (result.success) {
             showToast('配置已保存', 'success');
             configModal.hide();
+            loadInstances();
         } else {
             showToast('保存失败：' + result.error, 'danger');
         }
     } catch (error) {
         showToast('保存失败：' + error.message, 'danger');
     }
+}
+
+// 复制 profile 命令
+function copyProfileCommand(id, name) {
+    const profileName = `instance_${id}`;
+    const command = `openclaw --profile ${profileName} agent -m "你好"`;
+
+    navigator.clipboard.writeText(command).then(() => {
+        showToast(`已复制命令到剪贴板！\n${command}`, 'success');
+    }).catch(() => {
+        showToast('复制失败，请手动复制', 'warning');
+    });
+}
+
+// 打开 Web UI
+function openWebUI(port) {
+    window.open(`http://localhost:${port}`, '_blank');
 }
 
 // 获取实例详情
@@ -497,18 +534,27 @@ function updateTime() {
 function showTab(tab) {
     const instancesTab = document.getElementById('instancesTab');
     const resourcesTab = document.getElementById('resourcesTab');
+    const backupsTab = document.getElementById('backupsTab');
 
     if (tab === 'instances') {
         if (instancesTab) instancesTab.style.display = 'block';
         if (resourcesTab) resourcesTab.style.display = 'none';
+        if (backupsTab) backupsTab.style.display = 'none';
         loadInstances();
     } else if (tab === 'resources') {
         if (instancesTab) instancesTab.style.display = 'none';
         if (resourcesTab) resourcesTab.style.display = 'block';
+        if (backupsTab) backupsTab.style.display = 'none';
         loadResources();
+    } else if (tab === 'backups') {
+        if (instancesTab) instancesTab.style.display = 'none';
+        if (resourcesTab) resourcesTab.style.display = 'none';
+        if (backupsTab) backupsTab.style.display = 'block';
+        loadBackups();
     } else if (tab === 'system') {
         if (instancesTab) instancesTab.style.display = 'none';
         if (resourcesTab) resourcesTab.style.display = 'none';
+        if (backupsTab) backupsTab.style.display = 'none';
         loadSystemInfo();
     }
 }
@@ -668,6 +714,63 @@ async function viewLogs(id) {
 
     logsModal = new bootstrap.Modal(document.getElementById('logsModal'));
     logsModal.show();
+
+    // 启动实时日志更新
+    startLiveLogs(id);
+}
+
+// 实时日志更新 (SSE)
+let logsEventSource = null;
+
+function startLiveLogs(id) {
+    // 关闭之前的连接
+    if (logsEventSource) {
+        logsEventSource.close();
+    }
+
+    logsEventSource = new EventSource(`${API_BASE}/instances/${id}/logs/stream`);
+
+    logsEventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'log' && data.content) {
+            const content = document.getElementById('logsContent');
+            content.textContent += data.content;
+            // 自动滚动到底部
+            content.scrollTop = content.scrollHeight;
+        }
+    };
+
+    logsEventSource.onerror = () => {
+        console.log('SSE 连接错误，可能已关闭');
+        logsEventSource.close();
+    };
+}
+
+// 停止实时日志
+function stopLiveLogs() {
+    if (logsEventSource) {
+        logsEventSource.close();
+        logsEventSource = null;
+        if (document.getElementById('liveLogsStatus')) {
+            document.getElementById('liveLogsStatus').textContent = '关';
+            document.getElementById('toggleLiveLogs').classList.remove('btn-danger');
+            document.getElementById('toggleLiveLogs').classList.add('btn-outline-success');
+        }
+    }
+}
+
+// 切换实时日志
+function toggleLiveLogs() {
+    if (logsEventSource) {
+        stopLiveLogs();
+    } else if (currentInstanceId) {
+        startLiveLogs(currentInstanceId);
+        if (document.getElementById('liveLogsStatus')) {
+            document.getElementById('liveLogsStatus').textContent = '开';
+            document.getElementById('toggleLiveLogs').classList.remove('btn-outline-success');
+            document.getElementById('toggleLiveLogs').classList.add('btn-danger');
+        }
+    }
 }
 
 // 刷新日志
@@ -755,3 +858,140 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+// ==================== 备份管理功能 ====================
+
+// 创建备份
+async function createBackup(id, name) {
+    const backupName = prompt(`请输入备份名称（留空自动生成）:`, `${name}_${new Date().toISOString().slice(0, 10)}`);
+    if (backupName === null) return; // 用户取消
+
+    const btn = event.target.closest('button');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> 备份中...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/instances/${id}/backup`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: backupName || undefined })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(`备份创建成功：${result.data.name}`, 'success');
+        } else {
+            showToast('备份失败：' + result.error, 'danger');
+        }
+    } catch (error) {
+        showToast('备份失败：' + error.message, 'danger');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-cloud-upload"></i> 备份';
+        }
+    }
+}
+
+// 加载备份列表
+async function loadBackups() {
+    try {
+        const response = await fetch(`${API_BASE}/backups`);
+        const result = await response.json();
+
+        if (result.success) {
+            renderBackups(result.data.backups);
+            updateBackupStats(result.data);
+        } else {
+            showToast('加载备份列表失败：' + result.error, 'danger');
+        }
+    } catch (error) {
+        showToast('加载备份列表失败：' + error.message, 'danger');
+    }
+}
+
+// 渲染备份列表
+function renderBackups(backups) {
+    const tbody = document.getElementById('backupsTableBody');
+
+    if (backups.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">暂无备份</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = backups.map(backup => `
+        <tr>
+            <td><strong>${escapeHtml(backup.name)}</strong></td>
+            <td>${escapeHtml(backup.instanceName)} (#${backup.instanceId})</td>
+            <td>${(backup.size / 1024 / 1024).toFixed(2)} MB</td>
+            <td>${formatDate(backup.createdAt)}</td>
+            <td>
+                <button class="btn btn-sm btn-outline-success" onclick="restoreBackup('${backup.name}')" title="还原">
+                    <i class="bi bi-cloud-download"></i>
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteBackup('${backup.name}')" title="删除">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// 更新备份统计
+function updateBackupStats(data) {
+    document.getElementById('backupCount').textContent = data.backups ? data.backups.length : 0;
+    document.getElementById('backupTotalSize').textContent = (data.totalSize / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+// 删除备份
+async function deleteBackup(name) {
+    if (!confirm(`确定要删除备份 "${name}" 吗？此操作不可恢复！`)) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const result = await response.json();
+
+        if (result.success) {
+            showToast('备份已删除', 'success');
+            loadBackups();
+        } else {
+            showToast('删除失败：' + result.error, 'danger');
+        }
+    } catch (error) {
+        showToast('删除失败：' + error.message, 'danger');
+    }
+}
+
+// 还原备份
+async function restoreBackup(name) {
+    if (!confirm(`确定要还原备份 "${name}" 吗？\n\n警告：当前实例的现有数据将被覆盖！`)) return;
+
+    const btn = event.target.closest('button');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> 还原中...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/backups/${encodeURIComponent(name)}/restore`, { method: 'POST' });
+        const result = await response.json();
+
+        if (result.success) {
+            showToast(`备份还原成功！${result.data.emergencyBackup ? '\n已创建紧急备份：' + result.data.emergencyBackup : ''}`, 'success');
+            loadBackups();
+            loadInstances();
+        } else {
+            showToast('还原失败：' + result.error, 'danger');
+        }
+    } catch (error) {
+        showToast('还原失败：' + error.message, 'danger');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-cloud-download"></i>';
+        }
+    }
+}

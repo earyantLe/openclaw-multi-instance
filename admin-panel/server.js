@@ -608,7 +608,7 @@ app.post('/api/instances/:id/config', async (req, res) => {
             return res.status(400).json({ success: false, error: '请先停止实例再修改配置' });
         }
 
-        const { workspace } = req.body;
+        const { workspace, name, port } = req.body;
         const configFile = path.join(instance.configDir, 'config.json');
 
         if (!fs.existsSync(configFile)) {
@@ -616,15 +616,34 @@ app.post('/api/instances/:id/config', async (req, res) => {
         }
 
         const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+
+        // 更新配置
         if (workspace) config.workspace = workspace;
+        if (name) {
+            // 检查名称是否重复
+            const otherInstances = getInstances().filter(i => i.id !== instance.id);
+            if (otherInstances.some(i => i.name === name)) {
+                return res.status(400).json({ success: false, error: '实例名称已存在' });
+            }
+            config.instanceName = name;
+        }
+        if (port) {
+            const newPort = parseInt(port);
+            // 检查端口是否被占用
+            const otherInstances = getInstances().filter(i => i.id !== instance.id);
+            if (otherInstances.some(i => i.port === newPort)) {
+                return res.status(400).json({ success: false, error: '端口已被其他实例占用' });
+            }
+            config.port = newPort;
+        }
         config.updatedAt = new Date().toISOString();
 
         fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
 
         // 更新 .env 文件
-        const envContent = `OPENCLAW_PORT=${instance.port}
+        const envContent = `OPENCLAW_PORT=${port || instance.port}
 OPENCLAW_INSTANCE_ID=${instance.id}
-OPENCLAW_INSTANCE_NAME=${instance.name}
+OPENCLAW_INSTANCE_NAME=${name || instance.name}
 OPENCLAW_CONFIG_DIR=${instance.configDir}
 OPENCLAW_DATA_DIR=${instance.dataDir}
 OPENCLAW_LOG_DIR=${instance.logDir}
@@ -632,7 +651,17 @@ OPENCLAW_WORKSPACE=${workspace || instance.workspace}
 `;
         fs.writeFileSync(path.join(instance.dir, '.env'), envContent);
 
-        log_success(`配置更新：${instance.name}`);
+        // 更新注册表
+        const registry = readRegistry();
+        const idx = registry.instances.findIndex(i => i.id === instance.id);
+        if (idx !== -1) {
+            if (name) registry.instances[idx].name = name;
+            if (port) registry.instances[idx].port = parseInt(port);
+            if (workspace) registry.instances[idx].workspace = workspace;
+            writeRegistry(registry);
+        }
+
+        log_success(`配置更新：${name || instance.name}`);
         res.json({ success: true, message: '配置已更新', data: config });
     } catch (e) {
         console.error('更新配置失败:', e.message);
@@ -818,6 +847,200 @@ app.post('/api/logs/cleanup', (req, res) => {
 
         res.json({ success: true, message: '日志清理完成', data: results });
     } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 备份实例
+app.post('/api/instances/:id/backup', async (req, res) => {
+    try {
+        const instance = getInstanceById(req.params.id);
+        if (!instance) {
+            return res.status(404).json({ success: false, error: '实例不存在' });
+        }
+
+        const backupName = req.body.name || `${instance.name}_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`;
+        const backupDir = path.join(process.env.HOME, '.openclaw/backups');
+        const backupPath = path.join(backupDir, `${backupName}.tar.gz`);
+
+        // 创建备份目录
+        if (!fs.existsSync(backupDir)) {
+            fs.mkdirSync(backupDir, { recursive: true });
+        }
+
+        // 停止实例再备份（如果正在运行）
+        let wasRunning = false;
+        if (instance.status === 'running') {
+            await executeCommand('bash', [MANAGER_SCRIPT, 'stop', String(instance.id)], {
+                cwd: instance.dir
+            });
+            wasRunning = true;
+        }
+
+        // 使用 tar 打包备份
+        const { exec } = require('child_process');
+        await new Promise((resolve, reject) => {
+            exec(`tar -czf "${backupPath}" -C "$(dirname "${instance.dir}")" "$(basename "${instance.dir}")"`, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        // 如果之前是运行状态，恢复运行
+        if (wasRunning) {
+            await executeCommand('bash', [MANAGER_SCRIPT, 'start', String(instance.id)], {
+                cwd: instance.dir
+            });
+        }
+
+        // 记录备份信息
+        const backupInfo = {
+            name: backupName,
+            instanceId: instance.id,
+            instanceName: instance.name,
+            path: backupPath,
+            size: fs.statSync(backupPath).size,
+            createdAt: new Date().toISOString()
+        };
+
+        // 保存到备份注册表
+        const backupRegistryFile = path.join(backupDir, 'registry.json');
+        let backupRegistry = { backups: [] };
+        if (fs.existsSync(backupRegistryFile)) {
+            backupRegistry = JSON.parse(fs.readFileSync(backupRegistryFile, 'utf8'));
+        }
+        backupRegistry.backups.push(backupInfo);
+        fs.writeFileSync(backupRegistryFile, JSON.stringify(backupRegistry, null, 2));
+
+        log_success(`备份创建：${backupName}`);
+        res.json({ success: true, message: '备份创建成功', data: backupInfo });
+    } catch (e) {
+        console.error('备份失败:', e.message);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 获取备份列表
+app.get('/api/backups', (req, res) => {
+    try {
+        const backupDir = path.join(process.env.HOME, '.openclaw/backups');
+        const backupRegistryFile = path.join(backupDir, 'registry.json');
+
+        if (!fs.existsSync(backupRegistryFile)) {
+            return res.json({ success: true, data: { backups: [], totalSize: 0 } });
+        }
+
+        const backupRegistry = JSON.parse(fs.readFileSync(backupRegistryFile, 'utf8'));
+
+        // 计算总大小
+        let totalSize = 0;
+        for (const backup of backupRegistry.backups) {
+            try {
+                const stats = fs.statSync(backup.path);
+                totalSize += stats.size;
+            } catch (e) {
+                // 文件可能已被删除
+            }
+        }
+
+        res.json({
+            success: true,
+            data: {
+                backups: backupRegistry.backups.reverse(), // 新的在前
+                totalSize
+            }
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 删除备份
+app.delete('/api/backups/:name', (req, res) => {
+    try {
+        const backupDir = path.join(process.env.HOME, '.openclaw/backups');
+        const backupName = req.params.name;
+        const backupPath = path.join(backupDir, `${backupName}.tar.gz`);
+
+        if (!fs.existsSync(backupPath)) {
+            return res.status(404).json({ success: false, error: '备份文件不存在' });
+        }
+
+        // 删除文件
+        fs.unlinkSync(backupPath);
+
+        // 更新注册表
+        const backupRegistryFile = path.join(backupDir, 'registry.json');
+        if (fs.existsSync(backupRegistryFile)) {
+            const backupRegistry = JSON.parse(fs.readFileSync(backupRegistryFile, 'utf8'));
+            backupRegistry.backups = backupRegistry.backups.filter(b => b.name !== backupName);
+            fs.writeFileSync(backupRegistryFile, JSON.stringify(backupRegistry, null, 2));
+        }
+
+        log_success(`备份删除：${backupName}`);
+        res.json({ success: true, message: '备份已删除' });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 还原备份
+app.post('/api/backups/:name/restore', async (req, res) => {
+    try {
+        const backupDir = path.join(process.env.HOME, '.openclaw/backups');
+        const backupName = req.params.name;
+        const backupPath = path.join(backupDir, `${backupName}.tar.gz`);
+
+        if (!fs.existsSync(backupPath)) {
+            return res.status(404).json({ success: false, error: '备份文件不存在' });
+        }
+
+        // 读取备份信息
+        const backupRegistryFile = path.join(backupDir, 'registry.json');
+        const backupRegistry = JSON.parse(fs.readFileSync(backupRegistryFile, 'utf8'));
+        const backupInfo = backupRegistry.backups.find(b => b.name === backupName);
+
+        if (!backupInfo) {
+            return res.status(404).json({ success: false, error: '备份信息不存在' });
+        }
+
+        const instanceId = backupInfo.instanceId;
+        const instanceDir = path.join(process.env.HOME, '.openclaw/instances', String(instanceId));
+
+        // 如果实例存在且正在运行，先停止
+        const instance = getInstanceById(instanceId);
+        if (instance && instance.status === 'running') {
+            await executeCommand('bash', [MANAGER_SCRIPT, 'stop', String(instanceId)], {
+                cwd: instance.dir
+            });
+        }
+
+        // 如果实例目录存在，先备份当前状态
+        if (fs.existsSync(instanceDir)) {
+            const emergencyBackup = path.join(backupDir, `emergency_${instanceId}_${Date.now()}.tar.gz`);
+            const { exec } = require('child_process');
+            await new Promise((resolve, reject) => {
+                exec(`tar -czf "${emergencyBackup}" -C "$(dirname "${instanceDir}")" "$(basename "${instanceDir}")"`, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            });
+            log_success(`紧急备份：${emergencyBackup}`);
+        }
+
+        // 解压备份
+        const { exec } = require('child_process');
+        await new Promise((resolve, reject) => {
+            exec(`tar -xzf "${backupPath}" -C "$(dirname "${instanceDir}")"`, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        log_success(`备份还原：${backupName}`);
+        res.json({ success: true, message: '备份还原成功', data: { emergencyBackup } });
+    } catch (e) {
+        console.error('还原失败:', e.message);
         res.status(500).json({ success: false, error: e.message });
     }
 });

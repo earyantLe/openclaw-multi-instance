@@ -34,6 +34,11 @@
                             <i class="bi bi-bar-chart-line"></i> 资源监控
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#" onclick="showTab('backups')">
+                            <i class="bi bi-cloud-archive"></i> 备份管理
+                        </a>
+                    </li>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" id="batchMenu" role="button" data-bs-toggle="dropdown">
                             <i class="bi bi-collection"></i> 批量操作
@@ -247,6 +252,63 @@
                 </div>
             </div>
         </div>
+
+        <!-- 备份管理页面 -->
+        <div id="backupsTab" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4><i class="bi bi-cloud-archive"></i> 备份管理</h4>
+                <div>
+                    <button class="btn btn-outline-primary btn-sm" onclick="loadBackups()">
+                        <i class="bi bi-arrow-clockwise"></i> 刷新
+                    </button>
+                </div>
+            </div>
+
+            <!-- 备份统计 -->
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="card bg-info text-white">
+                        <div class="card-body text-center">
+                            <h5 class="card-title">备份总数</h5>
+                            <h2 id="backupCount">0</h2>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card bg-success text-white">
+                        <div class="card-body text-center">
+                            <h5 class="card-title">总大小</h5>
+                            <h2 id="backupTotalSize">0 MB</h2>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 备份列表 -->
+            <div class="card">
+                <div class="card-header">
+                    <i class="bi bi-list-ul"></i> 备份列表
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>名称</th>
+                                    <th>实例</th>
+                                    <th>大小</th>
+                                    <th>创建时间</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="backupsTableBody">
+                                <tr><td colspan="5" class="text-center">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 日志查看模态框 -->
@@ -255,20 +317,27 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="bi bi-file-text"></i> 实例日志 - <span id="logsInstanceName"></span></h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" onclick="stopLiveLogs()"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="input-group mb-3">
-                        <span class="input-group-text">行数</span>
-                        <input type="number" class="form-control" id="logLines" value="100" min="10" max="1000">
-                        <button class="btn btn-outline-primary" onclick="refreshLogs()">
-                            <i class="bi bi-arrow-clockwise"></i> 刷新
-                        </button>
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div class="input-group" style="width: auto;">
+                            <span class="input-group-text">行数</span>
+                            <input type="number" class="form-control" id="logLines" value="100" min="10" max="1000">
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-primary" onclick="refreshLogs()">
+                                <i class="bi bi-arrow-clockwise"></i> 刷新
+                            </button>
+                            <button class="btn btn-outline-success" id="toggleLiveLogs" onclick="toggleLiveLogs()">
+                                <i class="bi bi-broadcast"></i> 实时日志：<span id="liveLogsStatus">关</span>
+                            </button>
+                        </div>
                     </div>
                     <pre id="logsContent" class="logs-content">加载中...</pre>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" onclick="stopLiveLogs()">关闭</button>
                     <button type="button" class="btn btn-outline-primary" onclick="downloadLogs()">
                         <i class="bi bi-download"></i> 下载日志
                     </button>
@@ -307,16 +376,23 @@
                     <form id="configForm">
                         <input type="hidden" id="configInstanceId">
                         <div class="mb-3">
-                            <label class="form-label">工作空间目录</label>
-                            <input type="text" class="form-control" id="configWorkspace" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">实例 ID</label>
-                            <input type="text" class="form-control" id="configId" disabled>
+                            <label class="form-label">实例名称</label>
+                            <input type="text" class="form-control" id="configName" required>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">端口</label>
-                            <input type="text" class="form-control" id="configPort" disabled>
+                            <input type="number" class="form-control" id="configPortInput" min="1024" max="65535">
+                            <div class="form-text">修改后需要重启实例才能生效</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">工作空间目录</label>
+                            <input type="text" class="form-control" id="configWorkspace" required>
+                            <div class="form-text">实例的工作空间目录路径</div>
+                        </div>
+                        <hr>
+                        <div class="mb-3">
+                            <label class="form-label">实例 ID</label>
+                            <input type="text" class="form-control" id="configId" disabled>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">创建时间</label>
