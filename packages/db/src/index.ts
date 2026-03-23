@@ -1,5 +1,6 @@
 import { Model, Pojo } from 'objection';
 import Knex from 'knex';
+import { Client } from './client-manager';
 
 // Initialize Knex
 const knex = Knex({
@@ -36,7 +37,7 @@ export class Tenant extends Model {
   static relationMappings = {
     users: {
       relation: Model.HasManyRelation,
-      modelClass: User,
+      modelClass: () => User,
       join: {
         from: 'tenants.id',
         to: 'users.tenantId'
@@ -44,7 +45,7 @@ export class Tenant extends Model {
     },
     instances: {
       relation: Model.HasManyRelation,
-      modelClass: Instance,
+      modelClass: () => Instance,
       join: {
         from: 'tenants.id',
         to: 'instances.tenantId'
@@ -77,7 +78,7 @@ export class User extends Model {
   static relationMappings = {
     tenant: {
       relation: Model.BelongsToOneRelation,
-      modelClass: Tenant,
+      modelClass: () => Tenant,
       join: {
         from: 'users.tenantId',
         to: 'tenants.id'
@@ -85,7 +86,7 @@ export class User extends Model {
     },
     roles: {
       relation: Model.ManyToManyRelation,
-      modelClass: Role,
+      modelClass: () => Role,
       join: {
         from: 'users.id',
         through: {
@@ -119,7 +120,7 @@ export class Role extends Model {
   static relationMappings = {
     permissions: {
       relation: Model.ManyToManyRelation,
-      modelClass: Permission,
+      modelClass: () => Permission,
       join: {
         from: 'roles.id',
         through: {
@@ -131,7 +132,7 @@ export class Role extends Model {
     },
     users: {
       relation: Model.ManyToManyRelation,
-      modelClass: User,
+      modelClass: () => User,
       join: {
         from: 'roles.id',
         through: {
@@ -160,7 +161,7 @@ export class Permission extends Model {
   static relationMappings = {
     roles: {
       relation: Model.ManyToManyRelation,
-      modelClass: Role,
+      modelClass: () => Role,
       join: {
         from: 'permissions.id',
         through: {
@@ -177,13 +178,17 @@ export class Permission extends Model {
 export class Instance extends Model {
   id!: string;
   tenantId!: string;
+  clientId?: string;
+  clientType!: string;
   name!: string;
   profile!: string;
   port!: number;
   workspace?: string;
+  model?: string;
   status!: 'stopped' | 'running' | 'error' | 'starting' | 'stopping';
   pid?: number;
   config?: Record<string, any>;
+  envConfig?: Record<string, any>;
   lastStartedAt?: Date;
   lastStoppedAt?: Date;
   createdAt!: Date;
@@ -195,15 +200,23 @@ export class Instance extends Model {
   static relationMappings = {
     tenant: {
       relation: Model.BelongsToOneRelation,
-      modelClass: Tenant,
+      modelClass: () => Tenant,
       join: {
         from: 'instances.tenantId',
         to: 'tenants.id'
       }
     },
+    client: {
+      relation: Model.BelongsToOneRelation,
+      modelClass: () => Client,
+      join: {
+        from: 'instances.clientId',
+        to: 'clients.id'
+      }
+    },
     backups: {
       relation: Model.HasManyRelation,
-      modelClass: Backup,
+      modelClass: () => Backup,
       join: {
         from: 'instances.id',
         to: 'backups.instanceId'
@@ -211,7 +224,7 @@ export class Instance extends Model {
     },
     auditLogs: {
       relation: Model.HasManyRelation,
-      modelClass: AuditLog,
+      modelClass: () => AuditLog,
       join: {
         from: 'instances.id',
         to: 'audit_logs.instanceId'
@@ -239,7 +252,7 @@ export class Backup extends Model {
   static relationMappings = {
     instance: {
       relation: Model.BelongsToOneRelation,
-      modelClass: Instance,
+      modelClass: () => Instance,
       join: {
         from: 'backups.instanceId',
         to: 'instances.id'
@@ -268,7 +281,7 @@ export class AuditLog extends Model {
   static relationMappings = {
     user: {
       relation: Model.BelongsToOneRelation,
-      modelClass: User,
+      modelClass: () => User,
       join: {
         from: 'audit_logs.userId',
         to: 'users.id'
@@ -276,7 +289,7 @@ export class AuditLog extends Model {
     },
     instance: {
       relation: Model.BelongsToOneRelation,
-      modelClass: Instance,
+      modelClass: () => Instance,
       join: {
         from: 'audit_logs.instanceId',
         to: 'instances.id'
@@ -284,6 +297,9 @@ export class AuditLog extends Model {
     }
   };
 }
+
+// Export Client and ClientManager from client-manager
+export * from './client-manager';
 
 // Export knex instance for migrations
 export { knex as db };

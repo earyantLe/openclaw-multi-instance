@@ -1,6 +1,8 @@
 import winston from 'winston';
-import 'winston-daily-rotate-file';
 import path from 'path';
+
+// @ts-ignore - winston-daily-rotate-file types
+import 'winston-daily-rotate-file';
 
 const { combine, timestamp, printf, colorize, errors } = winston.format;
 
@@ -18,6 +20,7 @@ const logFormat = printf(({ level, message, timestamp, service, ...metadata }) =
 });
 
 // Daily rotate file transport
+// @ts-ignore - dynamic import for transport
 const dailyRotateTransport = new winston.transports.DailyRotateFile({
   filename: path.join(process.env.LOG_DIR || 'logs', '%DATE%.log'),
   datePattern: 'YYYY-MM-DD',

@@ -3,12 +3,41 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { logger } from '@openclaw/logger';
-import { Instance, Backup, AuditLog } from '@openclaw/db';
+import logger from '@openclaw/logger';
+import { Instance, Backup, AuditLog, Client, ClientManager } from '@openclaw/db';
+
+// Extend Express Request type
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+        tenantId: string;
+        email: string;
+        name: string;
+      };
+    }
+  }
+}
 
 const execAsync = promisify(exec);
 const app = express();
 const PORT = process.env.INSTANCE_PORT || 3002;
+
+// Initialize ClientManager
+const clientManager = new ClientManager();
+
+// Load client configurations on startup
+async function loadClientConfigs() {
+  try {
+    await clientManager.loadClients();
+    logger.info('Client configurations loaded');
+  } catch (error: any) {
+    logger.warn('Failed to load client configurations:', error.message);
+  }
+}
+
+loadClientConfigs();
 
 // Middleware
 app.use(helmet());
@@ -32,7 +61,7 @@ const verifyAuth = async (req: Request, res: Response, next: any) => {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
-    req.user = await response.json();
+    req.user = await response.json() as any;
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Authentication failed' });
@@ -40,14 +69,14 @@ const verifyAuth = async (req: Request, res: Response, next: any) => {
 };
 
 // Instance management
-app.post('/api/instances', verifyAuth, async (req: any, res: Response) => {
+app.post('/api/instances', verifyAuth, async (req: Request, res: Response) => {
   try {
-    const { name, port, workspace } = req.body;
-    const { tenantId } = req.user;
+    const { name, port, workspace, clientType, model, envConfig } = req.body;
+    const { tenantId } = req.user!;
 
     // Check tenant limits
     const tenantInstances = await Instance.query().where({ tenantId });
-    const tenant = await fetch(`${process.env.AUTH_SERVICE_URL || 'http://localhost:3001'}/api/tenants/${tenantId}`, {
+    const tenant: any = await fetch(`${process.env.AUTH_SERVICE_URL || 'http://localhost:3001'}/api/tenants/${tenantId}`, {
       headers: { Authorization: req.headers.authorization! }
     }).then(r => r.json());
 
@@ -55,12 +84,30 @@ app.post('/api/instances', verifyAuth, async (req: any, res: Response) => {
       return res.status(403).json({ error: `Instance limit reached: ${tenant.maxInstances}` });
     }
 
+    // Get client configuration
+    const client = await clientManager.getClient(clientType || 'claude-code');
     const profile = `instance_${Date.now()}`;
     const instancePort = port || (18789 + tenantInstances.length * 5);
 
-    // Create instance using instance-manager.sh
+    // Build command and environment based on client type
+    const tempInstance = {
+      id: `temp_${Date.now()}`,
+      tenantId,
+      name: name || profile,
+      profile,
+      port: instancePort,
+      workspace,
+      clientType: clientType || 'claude-code',
+      model,
+      envConfig
+    } as any;
+
+    const command = await clientManager.buildCommand(tempInstance);
+    const envVars = await clientManager.buildEnv(tempInstance);
+
+    // Create instance using instance-manager.sh with client-specific command
     const scriptPath = process.env.INSTANCE_MANAGER_PATH || './deploy-core/instance-manager.sh';
-    await execAsync(`${scriptPath} create ${profile} ${instancePort}`);
+    await execAsync(`${scriptPath} create ${profile} ${instancePort} "${command}"`);
 
     const instance = await Instance.query().insertAndFetch({
       id: `inst_${Date.now()}`,
@@ -69,8 +116,11 @@ app.post('/api/instances', verifyAuth, async (req: any, res: Response) => {
       profile,
       port: instancePort,
       workspace: workspace || `~/.openclaw/instances/${tenantId}/${profile}/workspace`,
+      clientType: clientType || 'claude-code',
+      model,
+      envConfig: envConfig || {},
       status: 'stopped',
-      config: {},
+      config: { command, envVars },
       createdAt: new Date(),
       updatedAt: new Date()
     });
@@ -79,15 +129,16 @@ app.post('/api/instances', verifyAuth, async (req: any, res: Response) => {
     await AuditLog.query().insert({
       id: `audit_${Date.now()}`,
       tenantId,
-      userId: req.user.id,
+      userId: req.user!.id,
       instanceId: instance.id,
       action: 'instance:create',
       resource: 'instance',
       resourceId: instance.id,
+      details: { clientType, model },
       createdAt: new Date()
     });
 
-    logger.info(`Instance created: ${instance.name}`, { tenantId, instanceId: instance.id });
+    logger.info(`Instance created: ${instance.name}`, { tenantId, instanceId: instance.id, clientType });
     res.status(201).json(instance);
   } catch (error: any) {
     logger.error(`Instance creation error: ${error.message}`);
@@ -95,16 +146,16 @@ app.post('/api/instances', verifyAuth, async (req: any, res: Response) => {
   }
 });
 
-app.get('/api/instances', verifyAuth, async (req: any, res: Response) => {
+app.get('/api/instances', verifyAuth, async (req: Request, res: Response) => {
   try {
-    const { tenantId } = req.user;
+    const { tenantId } = req.user!;
     const instances = await Instance.query().where({ tenantId });
 
     // Get live status for each instance
     const instancesWithStatus = await Promise.all(
       instances.map(async (instance: any) => {
         try {
-          const { stdout } = await execAsync(`pgrep -f "openclaw.*${instance.profile}"`);
+          const { stdout } = await execAsync(`pgrep -f "${instance.clientType || 'openclaw'}.*${instance.profile}"`);
           const pid = stdout.trim() ? parseInt(stdout.trim()) : undefined;
           return {
             ...instance,
@@ -124,10 +175,10 @@ app.get('/api/instances', verifyAuth, async (req: any, res: Response) => {
   }
 });
 
-app.get('/api/instances/:id', verifyAuth, async (req: any, res: Response) => {
+app.get('/api/instances/:id', verifyAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { tenantId } = req.user;
+    const { tenantId } = req.user!;
 
     const instance = await Instance.query().findOne({ id, tenantId });
     if (!instance) {
@@ -141,19 +192,22 @@ app.get('/api/instances/:id', verifyAuth, async (req: any, res: Response) => {
   }
 });
 
-app.post('/api/instances/:id/start', verifyAuth, async (req: any, res: Response) => {
+app.post('/api/instances/:id/start', verifyAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { tenantId } = req.user;
+    const { tenantId } = req.user!;
 
     const instance = await Instance.query().findOne({ id, tenantId });
     if (!instance) {
       return res.status(404).json({ error: 'Instance not found' });
     }
 
-    // Start instance
+    // Build command based on client type
+    const command = await clientManager.buildCommand(instance as any);
+
+    // Start instance with client-specific command
     const scriptPath = process.env.INSTANCE_MANAGER_PATH || './deploy-core/instance-manager.sh';
-    await execAsync(`${scriptPath} start ${instance.profile}`);
+    await execAsync(`${scriptPath} start ${instance.profile} "${command}"`);
 
     await Instance.query().patchAndFetchById(id, {
       status: 'running',
@@ -165,7 +219,7 @@ app.post('/api/instances/:id/start', verifyAuth, async (req: any, res: Response)
     await AuditLog.query().insert({
       id: `audit_${Date.now()}`,
       tenantId,
-      userId: req.user.id,
+      userId: req.user!.id,
       instanceId: id,
       action: 'instance:start',
       resource: 'instance',
@@ -173,7 +227,7 @@ app.post('/api/instances/:id/start', verifyAuth, async (req: any, res: Response)
       createdAt: new Date()
     });
 
-    logger.info(`Instance started: ${instance.name}`, { tenantId, instanceId: id });
+    logger.info(`Instance started: ${instance.name}`, { tenantId, instanceId: id, clientType: instance.clientType });
     res.json({ status: 'success', message: 'Instance started' });
   } catch (error: any) {
     logger.error(`Instance start error: ${error.message}`);
@@ -181,10 +235,10 @@ app.post('/api/instances/:id/start', verifyAuth, async (req: any, res: Response)
   }
 });
 
-app.post('/api/instances/:id/stop', verifyAuth, async (req: any, res: Response) => {
+app.post('/api/instances/:id/stop', verifyAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { tenantId } = req.user;
+    const { tenantId } = req.user!;
 
     const instance = await Instance.query().findOne({ id, tenantId });
     if (!instance) {
@@ -204,7 +258,7 @@ app.post('/api/instances/:id/stop', verifyAuth, async (req: any, res: Response) 
     await AuditLog.query().insert({
       id: `audit_${Date.now()}`,
       tenantId,
-      userId: req.user.id,
+      userId: req.user!.id,
       instanceId: id,
       action: 'instance:stop',
       resource: 'instance',
@@ -220,10 +274,10 @@ app.post('/api/instances/:id/stop', verifyAuth, async (req: any, res: Response) 
   }
 });
 
-app.post('/api/instances/:id/restart', verifyAuth, async (req: any, res: Response) => {
+app.post('/api/instances/:id/restart', verifyAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { tenantId } = req.user;
+    const { tenantId } = req.user!;
 
     const instance = await Instance.query().findOne({ id, tenantId });
     if (!instance) {
@@ -247,10 +301,10 @@ app.post('/api/instances/:id/restart', verifyAuth, async (req: any, res: Respons
   }
 });
 
-app.delete('/api/instances/:id', verifyAuth, async (req: any, res: Response) => {
+app.delete('/api/instances/:id', verifyAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { tenantId } = req.user;
+    const { tenantId } = req.user!;
     const { force } = req.query;
 
     const instance = await Instance.query().findOne({ id, tenantId });
@@ -268,7 +322,7 @@ app.delete('/api/instances/:id', verifyAuth, async (req: any, res: Response) => 
     await AuditLog.query().insert({
       id: `audit_${Date.now()}`,
       tenantId,
-      userId: req.user.id,
+      userId: req.user!.id,
       instanceId: id,
       action: 'instance:delete',
       resource: 'instance',
@@ -284,11 +338,74 @@ app.delete('/api/instances/:id', verifyAuth, async (req: any, res: Response) => 
   }
 });
 
+// Client management
+app.get('/api/clients', verifyAuth, async (req: Request, res: Response) => {
+  try {
+    const { tenantId } = req.user!;
+
+    // Get available clients (default templates + tenant-specific)
+    const defaultClients = ClientManager.getDefaultClients();
+
+    // Try to get tenant-specific clients from database
+    let tenantClients: any[] = [];
+    try {
+      tenantClients = await Client.query().where({ tenantId, is_active: true });
+    } catch (error: any) {
+      logger.warn('Failed to load tenant clients:', error.message);
+    }
+
+    // Merge default and tenant-specific clients
+    const clients = [
+      ...defaultClients.map(c => ({ ...c, source: 'default' })),
+      ...tenantClients.map(c => ({ ...c, source: 'tenant' }))
+    ];
+
+    res.json(clients);
+  } catch (error: any) {
+    logger.error(`Client list error: ${error.message}`);
+    res.status(500).json({ error: 'Failed to list clients' });
+  }
+});
+
+// Register a new client configuration
+app.post('/api/clients', verifyAuth, async (req: Request, res: Response) => {
+  try {
+    const { tenantId } = req.user!;
+    const { name, clientType, command, profileSupport, profileFormat, gatewayCommand, configDir, workspaceDir, envTemplate } = req.body;
+
+    const client = await Client.query().insertAndFetch({
+      id: `client_${Date.now()}`,
+      tenantId,
+      name,
+      clientType,
+      command,
+      profileSupport: profileSupport !== undefined ? profileSupport : true,
+      profileFormat,
+      gatewayCommand,
+      configDir,
+      workspaceDir,
+      envTemplate: envTemplate || {},
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    // Register with ClientManager
+    await clientManager.registerClient(client);
+
+    logger.info(`Client registered: ${client.name}`, { tenantId, clientType });
+    res.status(201).json(client);
+  } catch (error: any) {
+    logger.error(`Client registration error: ${error.message}`);
+    res.status(500).json({ error: 'Failed to register client' });
+  }
+});
+
 // Backup management
-app.post('/api/instances/:id/backup', verifyAuth, async (req: any, res: Response) => {
+app.post('/api/instances/:id/backup', verifyAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { tenantId } = req.user;
+    const { tenantId } = req.user!;
     const { name } = req.body;
 
     const instance = await Instance.query().findOne({ id, tenantId });
